@@ -15,7 +15,7 @@ from spotify_nicotine import __version__, oauth, ui
 from spotify_nicotine.config import Config, ConfigError, load_config, parse_playlist_ref
 from spotify_nicotine.models import StatusReason, TrackStatus
 from spotify_nicotine.orchestrator import reconcile, run_download
-from spotify_nicotine.rename import apply_renames
+from spotify_nicotine.organize import assign_album_folders, organize_files
 from spotify_nicotine.resolve import run_resolve
 from spotify_nicotine.slsk_api import SlskApiError, SlskClient
 from spotify_nicotine.spotify import (
@@ -133,6 +133,14 @@ def build_parser() -> argparse.ArgumentParser:
             dest="rename_min_confidence",
             help="confidence required before a file is renamed (default 1.0, "
             "i.e. only perfect matches)",
+        )
+        sub.add_argument(
+            "--album-folders",
+            action="store_true",
+            default=False,
+            dest="album_folders",
+            help="group downloads from the same album (2+ tracks in the "
+            "playlist) into an 'Artist - Album' folder",
         )
         sub.add_argument(
             "--retry-no-results",
@@ -319,6 +327,24 @@ def cmd_download(cfg: Config, playlist_id: str) -> int:
     state = store.load() or new_state(meta)
     changes = merge_playlist(state, meta, tracks, skipped)
 
+    if cfg.album_folders:
+        albums = assign_album_folders(state)
+        if albums:
+            print(
+                "Album folders: %d album(s) with 2+ tracks (%s)"
+                % (
+                    len(albums),
+                    ", ".join("%s x%d" % (name, n) for name, n in sorted(albums.items())[:3])
+                    + (", ..." if len(albums) > 3 else ""),
+                )
+            )
+        if not cfg.dest_dir:
+            print(
+                "  Note: --dest-dir is not set, so album folders are created "
+                "inside whatever folder Nicotine+ downloads to. Set --dest-dir "
+                "for everything to land in one predictable place."
+            )
+
     if cfg.retry_no_results:
         reset = 0
         for record in state["tracks"].values():
@@ -394,7 +420,7 @@ def cmd_status(cfg: Config, playlist_id: str) -> int:
             "(Nicotine+ API not reachable; showing last known state without "
             "refreshing transfer progress)"
         )
-    apply_renames(state, cfg, store, log=print)
+    organize_files(state, cfg, store, log=print)
 
     for line in ui.summary_lines(state, verbose=True):
         print(line)

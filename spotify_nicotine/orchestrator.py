@@ -31,7 +31,11 @@ from spotify_nicotine.models import (
     TRANSIENT_FAILURE_STATUSES,
     TrackStatus,
 )
-from spotify_nicotine.rename import apply_renames, local_filename
+from spotify_nicotine.organize import (
+    destination_folder,
+    local_filename,
+    organize_files,
+)
 from spotify_nicotine.slsk_api import SearchWatch, SlskApiError, SlskClient
 from spotify_nicotine.state import (
     StateStore,
@@ -171,7 +175,7 @@ def enqueue_candidate(
         candidate["virtual_path"],
         int(candidate.get("size") or 0),
         file_attributes=candidate.get("file_attributes") or {},
-        folder_path=cfg.dest_dir,
+        folder_path=destination_folder(record, cfg),
     )
     record["chosen_index"] = candidate_index
     record.setdefault("attempts", []).append(
@@ -296,7 +300,7 @@ def _nudge_or_drop(
         candidate["virtual_path"],
         int(candidate.get("size") or 0),
         file_attributes=candidate.get("file_attributes") or {},
-        folder_path=cfg.dest_dir,
+        folder_path=destination_folder(record, cfg),
     )
     attempt["retries"] = retries + 1
     attempt["last_retry_at"] = now_iso()
@@ -825,4 +829,4 @@ def run_download(
         monitor_until_settled(
             state, slsk, cfg, store, log=log, sleep=sleep, clock=clock
         )
-        apply_renames(state, cfg, store, log=log)
+        organize_files(state, cfg, store, log=log)

@@ -40,6 +40,7 @@ DEFAULTS = {
     "retry_no_results": False,
     "rename_files": False,
     "rename_min_confidence": 1.0,
+    "album_folders": False,
     "state_dir": "./state",
     "verbose": False,
 }
@@ -95,6 +96,7 @@ class Config:
     dry_run: bool
     rename_files: bool
     rename_min_confidence: float
+    album_folders: bool
     state_dir: str
     verbose: bool
 
@@ -242,6 +244,7 @@ def load_config(args: argparse.Namespace, environ: Optional[Dict[str, str]] = No
         merged["limit"] = int(merged["limit"])
     merged["dry_run"] = bool(merged["dry_run"])
     merged["rename_files"] = bool(merged["rename_files"])
+    merged["album_folders"] = bool(merged["album_folders"])
     merged["retry_no_results"] = bool(merged["retry_no_results"])
     merged["verbose"] = bool(merged["verbose"])
 

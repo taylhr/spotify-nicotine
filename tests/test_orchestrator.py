@@ -10,7 +10,7 @@ from spotify_nicotine.orchestrator import (
     run_download,
     search_track,
 )
-from spotify_nicotine.rename import apply_renames
+from spotify_nicotine.organize import organize_files
 from spotify_nicotine.state import StateStore, merge_playlist, new_state
 
 from tests.conftest import make_cfg, make_item, make_track
@@ -476,7 +476,7 @@ class TestRenameDoesNotBreakResume:
 
         reconcile(state, slsk, cfg, store)
         assert record["status"] == TrackStatus.DOWNLOADED
-        assert apply_renames(state, cfg, store) == 1
+        assert organize_files(state, cfg, store) == 1
         assert (downloads / "Eagles - Hotel California.mp3").exists()
 
         searches_before = len(slsk.searches)
@@ -506,7 +506,7 @@ class TestRenameDoesNotBreakResume:
         (downloads / chosen["virtual_path"].rsplit("\\", 1)[-1]).write_text("audio")
         slsk.set_status(chosen["username"], chosen["virtual_path"], "Finished")
         reconcile(state, slsk, cfg, store)
-        apply_renames(state, cfg, store)
+        organize_files(state, cfg, store)
 
         slsk.transfers.clear()  # user cleared finished transfers in the GUI
         enqueues_before = len(slsk.enqueues)

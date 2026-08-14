@@ -272,6 +272,40 @@ Details worth knowing:
   flag are only renamed if the tool still knows where they landed, which it
   does when `--dest-dir` is set.
 
+### Grouping albums into folders
+
+With `--album-folders`, the playlist is scanned at the start of every run for
+albums contributing **2 or more tracks**; those downloads are grouped into an
+`Artist - Album` folder. A lone track from an album is treated as a single
+and left loose. The two tidying flags combine well:
+
+```bash
+.venv/bin/python -m spotify_nicotine download "https://open.spotify.com/playlist/YOUR_PLAYLIST_ID" \
+  --dest-dir ~/Music/soulseek --album-folders --rename-files --rename-min-confidence 0.95
+```
+
+```text
+~/Music/soulseek/
+├── Eagles - Hotel California/
+│   ├── Eagles - Hotel California.mp3
+│   └── Eagles - New Kid in Town.mp3
+└── Moby - Porcelain.mp3          ← only track from its album
+```
+
+**Do you need to specify Nicotine+'s download folder?** No — the tool learns
+where files land from the API and can create album folders right there. But
+setting `--dest-dir` is recommended: with it, downloads go *straight into*
+the album folder (no moving at all) and everything lands in one predictable
+place. Without it, files are moved into album folders after they finish,
+inside whichever folder Nicotine+ chose — which can be a per-uploader
+subfolder depending on your Nicotine+ settings.
+
+Album grouping applies to already-downloaded tracks too, so turning the flag
+on later tidies what you already have (as long as the tool still knows where
+those files are — see the note at the end of the previous section). Files are
+only ever moved into a folder, never re-shuffled afterwards: if a playlist
+edit later drops an album below 2 tracks, already-filed songs stay put.
+
 ### Checking progress later
 
 ```bash
@@ -304,6 +338,7 @@ All options go after the subcommand. Defaults in parentheses.
 | `--dry-run` | Search and score only; queue nothing. |
 | `--rename-files` | Rename finished downloads to `Artist - Title.ext` using the Spotify metadata (off by default). Only files at or above `--rename-min-confidence` are touched. |
 | `--rename-min-confidence 1.0` | Confidence required before a file is renamed (`1.0` — only flawless matches). A score of exactly 1.0 needs the album folder to match too; an otherwise-perfect match in a plain folder scores ~0.96, so `--rename-min-confidence 0.95` is the practical setting if too few files get renamed. |
+| `--album-folders` | Put downloads from the same album into an `Artist - Album` folder, when the playlist has 2+ tracks from that album (off by default). |
 | `--state-dir ./state` | Where per-playlist progress files live (`./state`). |
 | `--api-url URL` | Nicotine+ API address (`http://127.0.0.1:12339`). |
 | `--api-token TOKEN` | API token, if you set one in the plugin settings. |
@@ -426,7 +461,7 @@ so you can accept or reject them deliberately.
 .venv/bin/python -m pytest
 ```
 
-The test suite (259 tests) runs fully offline. `scripts/smoke.sh` is a live
+The test suite (276 tests) runs fully offline. `scripts/smoke.sh` is a live
 end-to-end checklist to run on the machine where Nicotine+ is installed.
 State files are plain JSON in `./state/` — safe to inspect, and deleting one
 makes the tool treat that playlist as brand new.
