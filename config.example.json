@@ -7,6 +7,8 @@
   "search_delay": 2.0,
   "search_concurrency": 6,
   "max_fallbacks": 3,
+  "stall_retry_mins": 5.0,
+  "max_retries": 3,
   "monitor_mins": 10.0,
   "state_dir": "./state",
   "api_url": "http://127.0.0.1:12339"

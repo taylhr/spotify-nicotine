@@ -255,7 +255,9 @@ All options go after the subcommand. Defaults in parentheses.
 | `--search-timeout 20` | Hard cap on waiting for one search's results (`20`). Most searches conclude much sooner — as soon as results stop arriving. |
 | `--search-delay 2.0` | Minimum seconds between search dispatches (`2.0`, floor `0.5`). This is the Soulseek-server politeness limit; lowering it speeds things up but risks a temporary search ban. |
 | `--search-concurrency 6` | How many track searches run at once (`6`, max `15`). Searches overlap their waiting time; the dispatch rate above still applies globally. |
-| `--max-fallbacks 3` | If a download fails permanently, how many alternative candidates to try (`3`). |
+| `--max-fallbacks 3` | If a download dies permanently (cancelled, filtered, disk error), how many alternative candidates to try (`3`). |
+| `--stall-retry-mins 5` | How long a download may sit stalled (stuck queue, connection dropped, uploader offline) before it gets nudged — the equivalent of clicking *Retry* in Nicotine+ (`5`). |
+| `--max-retries 3` | Nudges per uploader before giving up on them and falling back to the next candidate (`3`, `0` = never nudge or drop). A remote queue that is still *moving* doesn't consume nudges. |
 | `--monitor-mins 10` | After queueing, watch transfers for up to this many minutes (`10`, `0` = don't wait). |
 | `--limit N` | Only process the first N unfinished tracks (testing). |
 | `--dest-dir PATH` | Ask Nicotine+ to save these files into a specific folder (e.g. one folder per playlist). |
@@ -358,11 +360,16 @@ so you can accept or reject them deliberately.
   server search-throttle looks like. Stop the run, wait a few minutes, and
   restart with a higher `--search-delay` and/or lower `--search-concurrency`
   (resume picks up where it left off).
-- **A download sits at "Queued" forever** — you're in that uploader's queue;
-  this is normal on Soulseek and can take hours. It keeps going inside
-  Nicotine+; the script reports these instead of gambling on a duplicate
-  download from someone else. (Failed transfers *do* auto-fall-back to the
-  next candidate.)
+- **A download sits at "Queued" or "User logged off"** — connection blips
+  and remote queues are handled patiently, because falling back to another
+  uploader immediately can end in *two* copies of the file (Nicotine+
+  auto-retries these itself, and the API has no cancel). The script nudges a
+  stalled download every `--stall-retry-mins` (like clicking *Retry*), and
+  only after `--max-retries` fruitless nudges drops that uploader and moves
+  to the next candidate. When it does drop one, it warns you: the abandoned
+  transfer stays in Nicotine+'s list and may still finish later — remove it
+  there if you don't want a second copy. Only permanently-dead transfers
+  (cancelled, filtered, disk errors) trigger an immediate fallback.
 
 ## For developers
 
@@ -371,7 +378,7 @@ so you can accept or reject them deliberately.
 .venv/bin/python -m pytest
 ```
 
-The test suite (215 tests) runs fully offline. `scripts/smoke.sh` is a live
+The test suite (227 tests) runs fully offline. `scripts/smoke.sh` is a live
 end-to-end checklist to run on the machine where Nicotine+ is installed.
 State files are plain JSON in `./state/` — safe to inspect, and deleting one
 makes the tool treat that playlist as brand new.

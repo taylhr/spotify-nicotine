@@ -128,6 +128,17 @@ class TestPrecedence:
         with pytest.raises(ConfigError, match="search_delay"):
             load_config(make_args(search_delay=0.2), environ={})
 
+    def test_stall_retry_defaults(self):
+        cfg = load_config(make_args(), environ={})
+        assert cfg.stall_retry_mins == 5.0
+        assert cfg.max_retries == 3
+
+    def test_stall_retry_validation(self):
+        with pytest.raises(ConfigError, match="max_retries"):
+            load_config(make_args(max_retries=-1), environ={})
+        with pytest.raises(ConfigError, match="stall_retry_mins"):
+            load_config(make_args(stall_retry_mins=0.5), environ={})
+
     def test_config_file_overrides_defaults(self, tmp_path):
         path = tmp_path / "config.json"
         path.write_text(json.dumps({"prefer_bitrate": 256, "formats": "flac,mp3"}))

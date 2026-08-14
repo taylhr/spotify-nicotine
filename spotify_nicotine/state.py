@@ -24,6 +24,18 @@ def now_iso() -> str:
     )
 
 
+def seconds_since(iso_timestamp: Optional[str]) -> float:
+    """Age of a stored ISO timestamp in seconds; very large when unparsable."""
+    if not iso_timestamp:
+        return float("inf")
+    try:
+        then = datetime.datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return float("inf")
+    delta = datetime.datetime.now(datetime.timezone.utc) - then
+    return delta.total_seconds()
+
+
 class StateStore:
     def __init__(self, state_dir: str, playlist_id: str):
         self.state_dir = state_dir
@@ -119,7 +131,21 @@ def merge_playlist(
         else:
             record["spotify"] = track.to_dict()
             if record.get("status") == TrackStatus.REMOVED:
-                set_track_status(record, TrackStatus.PENDING)
+                # Restore to the progress the track had when it left the
+                # playlist. Restoring a queued track to 'pending' would
+                # re-search and re-download it even though its original
+                # download may have finished meanwhile; restored-to-queued
+                # tracks get reconciled against the transfer list instead.
+                prior = record.pop("status_before_removed", None)
+                if prior in (TrackStatus.DOWNLOADING, TrackStatus.QUEUED):
+                    prior = TrackStatus.QUEUED
+                elif prior not in (
+                    TrackStatus.NEEDS_REVIEW,
+                    TrackStatus.FAILED,
+                    TrackStatus.SKIPPED,
+                ):
+                    prior = TrackStatus.PENDING
+                set_track_status(record, prior)
                 summary["restored"].append(track.id)
 
     for track_id, record in records.items():
@@ -128,6 +154,7 @@ def merge_playlist(
         status = record.get("status")
         if status in (TrackStatus.DOWNLOADED, TrackStatus.REMOVED):
             continue
+        record["status_before_removed"] = status
         set_track_status(
             record, TrackStatus.REMOVED, StatusReason.REMOVED_FROM_PLAYLIST
         )

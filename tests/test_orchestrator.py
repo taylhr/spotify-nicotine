@@ -256,12 +256,12 @@ class TestReconcile:
     def test_terminal_failure_falls_back_to_next_gated(self, tmp_path, cfg):
         store, state, slsk, record = self._queued_state(tmp_path, cfg)
         chosen = record["candidates"][0]
-        slsk.set_status(chosen["username"], chosen["virtual_path"], "Connection timeout")
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "Local file error")
 
         reconcile(state, slsk, cfg, store)
         assert record["status"] == TrackStatus.QUEUED
         assert record["chosen_index"] == 1
-        assert record["attempts"][0]["outcome"] == "Connection timeout"
+        assert record["attempts"][0]["outcome"] == "Local file error"
         assert len(slsk.enqueues) == 2
 
     def test_fallback_skips_below_gate_candidates(self, tmp_path, cfg):
@@ -323,6 +323,133 @@ class TestReconcile:
 
         reconcile(state, slsk, cfg, store)
         assert record["status"] == TrackStatus.DOWNLOADING
+
+
+class TestStallRetries:
+    """Transient failures and stuck queues are nudged (Nicotine+ retry), not
+    abandoned — falling back immediately double-downloads because there is no
+    cancel API and Nicotine+ auto-retries connection failures itself."""
+
+    def _queued_state(self, tmp_path, cfg):
+        store, state = setup_state(tmp_path, make_track(track_id="t1"))
+        slsk = FakeSlsk({"default": good_items(6)})
+        run_scheduler(cfg, state, slsk, store)
+        record = state["tracks"]["t1"]
+        for index, conf in enumerate((0.95, 0.9, 0.85)):
+            record["candidates"][index]["confidence"] = conf
+        del record["candidates"][3:]
+        return store, state, slsk, record
+
+    @staticmethod
+    def _backdate(attempt, minutes):
+        import datetime
+
+        iso = (
+            (
+                datetime.datetime.now(datetime.timezone.utc)
+                - datetime.timedelta(minutes=minutes)
+            )
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        attempt["enqueued_at"] = iso
+        if attempt.get("last_retry_at"):
+            attempt["last_retry_at"] = iso
+        if attempt.get("last_progress_at"):
+            attempt["last_progress_at"] = iso
+
+    def test_transient_failure_does_not_fall_back_immediately(self, tmp_path, cfg):
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "Connection timeout")
+
+        reconcile(state, slsk, cfg, store)
+        assert record["status"] == TrackStatus.QUEUED
+        assert record["chosen_index"] == 0  # no fallback
+        assert len(slsk.enqueues) == 1  # and no nudge yet (cooldown)
+
+    def test_transient_failure_nudged_after_cooldown(self, tmp_path, cfg):
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "User logged off")
+        self._backdate(record["attempts"][-1], minutes=10)
+
+        messages = []
+        reconcile(state, slsk, cfg, store, log=messages.append)
+        assert record["chosen_index"] == 0
+        assert len(slsk.enqueues) == 2  # re-enqueued the SAME candidate
+        assert slsk.enqueues[-1]["username"] == chosen["username"]
+        assert slsk.enqueues[-1]["virtual_path"] == chosen["virtual_path"]
+        attempt = record["attempts"][-1]
+        assert attempt["retries"] == 1
+        assert attempt["last_retry_at"]
+        assert any("nudged" in m for m in messages)
+
+    def test_stagnant_queue_nudged_after_cooldown(self, tmp_path, cfg):
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        transfer = slsk.transfers[(chosen["username"], chosen["virtual_path"])]
+        transfer["status"] = "Queued"
+        transfer["queue_position"] = 14
+        record["attempts"][-1]["last_queue_position"] = 14  # not moving
+        self._backdate(record["attempts"][-1], minutes=10)
+
+        reconcile(state, slsk, cfg, store)
+        assert len(slsk.enqueues) == 2
+        assert record["attempts"][-1]["retries"] == 1
+
+    def test_moving_queue_counts_as_progress(self, tmp_path, cfg):
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        transfer = slsk.transfers[(chosen["username"], chosen["virtual_path"])]
+        transfer["status"] = "Queued"
+        transfer["queue_position"] = 5
+        record["attempts"][-1]["last_queue_position"] = 14  # improved since
+        self._backdate(record["attempts"][-1], minutes=30)
+
+        reconcile(state, slsk, cfg, store)
+        attempt = record["attempts"][-1]
+        assert len(slsk.enqueues) == 1  # no nudge: the queue is moving
+        assert attempt.get("retries", 0) == 0
+        assert attempt["last_queue_position"] == 5
+        assert attempt["last_progress_at"]
+
+    def test_drop_uploader_after_retry_budget(self, tmp_path, cfg):
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "User logged off")
+        record["attempts"][-1]["retries"] = cfg.max_retries
+        self._backdate(record["attempts"][-1], minutes=10)
+
+        messages = []
+        reconcile(state, slsk, cfg, store, log=messages.append)
+        assert record["chosen_index"] == 1  # fell back to the next candidate
+        assert "dropped after 3 stalled retries" in record["attempts"][0]["outcome"]
+        assert record["status"] == TrackStatus.QUEUED
+        assert any("dropping this uploader" in m for m in messages)
+        assert any("may still finish later" in m for m in messages)
+
+    def test_retries_disabled_never_nudges_or_drops(self, tmp_path):
+        cfg = make_cfg(max_retries=0)
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "Connection timeout")
+        self._backdate(record["attempts"][-1], minutes=60)
+
+        reconcile(state, slsk, cfg, store)
+        assert record["chosen_index"] == 0
+        assert len(slsk.enqueues) == 1
+        assert record["status"] == TrackStatus.QUEUED
+
+    def test_paused_never_nudged(self, tmp_path, cfg):
+        store, state, slsk, record = self._queued_state(tmp_path, cfg)
+        chosen = record["candidates"][0]
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "Paused")
+        self._backdate(record["attempts"][-1], minutes=60)
+
+        reconcile(state, slsk, cfg, store)
+        assert len(slsk.enqueues) == 1
 
 
 class TestMonitor:

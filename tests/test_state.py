@@ -101,6 +101,37 @@ class TestMergePlaylist:
         assert summary["restored"] == ["t1"]
         assert state["tracks"]["t1"]["status"] == TrackStatus.PENDING
 
+    def test_removed_while_queued_restores_to_queued(self):
+        # Restoring to pending would re-search and re-download a track whose
+        # original download may have completed meanwhile; reconciliation
+        # against the transfer list must get the chance to decide.
+        state = make_state_with(make_track(track_id="t1"))
+        record = state["tracks"]["t1"]
+        set_track_status(record, TrackStatus.QUEUED)
+        record["chosen_index"] = 0
+        merge_playlist(state, META, [], [])
+        assert record["status"] == TrackStatus.REMOVED
+        assert record["status_before_removed"] == TrackStatus.QUEUED
+
+        merge_playlist(state, META, [make_track(track_id="t1")], [])
+        assert record["status"] == TrackStatus.QUEUED
+        assert record["chosen_index"] == 0  # candidate choice preserved
+        assert "status_before_removed" not in record
+
+    def test_removed_while_downloading_restores_to_queued(self):
+        state = make_state_with(make_track(track_id="t1"))
+        set_track_status(state["tracks"]["t1"], TrackStatus.DOWNLOADING)
+        merge_playlist(state, META, [], [])
+        merge_playlist(state, META, [make_track(track_id="t1")], [])
+        assert state["tracks"]["t1"]["status"] == TrackStatus.QUEUED
+
+    def test_removed_while_needs_review_restores_to_needs_review(self):
+        state = make_state_with(make_track(track_id="t1"))
+        set_track_status(state["tracks"]["t1"], TrackStatus.NEEDS_REVIEW)
+        merge_playlist(state, META, [], [])
+        merge_playlist(state, META, [make_track(track_id="t1")], [])
+        assert state["tracks"]["t1"]["status"] == TrackStatus.NEEDS_REVIEW
+
     def test_skipped_list_refreshed(self):
         state = new_state(META)
         merge_playlist(state, META, [], [{"position": 3, "reason": "local_track"}])

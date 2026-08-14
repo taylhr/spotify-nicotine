@@ -84,6 +84,19 @@ def build_parser() -> argparse.ArgumentParser:
             help="how many track searches run at once (default 6)",
         )
         sub.add_argument("--max-fallbacks", type=int, dest="max_fallbacks")
+        sub.add_argument(
+            "--stall-retry-mins",
+            type=float,
+            dest="stall_retry_mins",
+            help="minutes a download may stall before it is nudged (default 5)",
+        )
+        sub.add_argument(
+            "--max-retries",
+            type=int,
+            dest="max_retries",
+            help="stalled-download nudges before dropping the uploader "
+            "(default 3, 0 = never nudge or drop)",
+        )
         sub.add_argument("--monitor-mins", type=float, dest="monitor_mins")
         sub.add_argument("--limit", type=int, help="only process first N tracks")
         sub.add_argument(

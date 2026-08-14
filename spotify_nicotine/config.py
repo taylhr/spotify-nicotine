@@ -26,6 +26,8 @@ DEFAULTS = {
     "search_delay": 2.0,
     "search_concurrency": 6,
     "max_fallbacks": 3,
+    "stall_retry_mins": 5.0,
+    "max_retries": 3,
     "monitor_mins": 10.0,
     "limit": None,
     "dest_dir": None,
@@ -71,6 +73,8 @@ class Config:
     search_delay: float
     search_concurrency: int
     max_fallbacks: int
+    stall_retry_mins: float
+    max_retries: int
     monitor_mins: float
     limit: Optional[int]
     dest_dir: Optional[str]
@@ -180,10 +184,29 @@ def load_config(args: argparse.Namespace, environ: Optional[Dict[str, str]] = No
             "spotify_auth_mode must be one of: %s" % ", ".join(AUTH_MODES)
         )
     merged["formats"] = parse_formats(merged["formats"])
-    for key in ("min_confidence", "search_timeout", "search_delay", "monitor_mins"):
+    for key in (
+        "min_confidence",
+        "search_timeout",
+        "search_delay",
+        "stall_retry_mins",
+        "monitor_mins",
+    ):
         merged[key] = float(merged[key])
-    for key in ("prefer_bitrate", "min_bitrate", "max_fallbacks", "search_concurrency"):
+    for key in (
+        "prefer_bitrate",
+        "min_bitrate",
+        "max_fallbacks",
+        "max_retries",
+        "search_concurrency",
+    ):
         merged[key] = int(merged[key])
+    if merged["max_retries"] < 0:
+        raise ConfigError("max_retries must be >= 0 (0 disables stall retries)")
+    if merged["stall_retry_mins"] < 1:
+        raise ConfigError(
+            "stall_retry_mins must be at least 1 minute — nudging a peer's "
+            "queue more often than that is abusive"
+        )
     if not 1 <= merged["search_concurrency"] <= 15:
         raise ConfigError(
             "search_concurrency must be between 1 and 15 (the Nicotine+ plugin "

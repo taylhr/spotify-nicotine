@@ -22,16 +22,19 @@ from spotify_nicotine.matching import (
 from spotify_nicotine.models import (
     Candidate,
     FINISHED_STATUS,
+    QUEUED_TRANSFER_STATUS,
     StatusReason,
     TERMINAL_FAILURE_STATUSES,
     Track,
     TRANSFERRING_STATUSES,
+    TRANSIENT_FAILURE_STATUSES,
     TrackStatus,
 )
 from spotify_nicotine.slsk_api import SearchWatch, SlskApiError, SlskClient
 from spotify_nicotine.state import (
     StateStore,
     now_iso,
+    seconds_since,
     set_track_status,
     tracks_with_status,
 )
@@ -194,7 +197,7 @@ def _fail_or_fallback(
     log: Log,
     display: str,
 ) -> None:
-    """Current attempt hit a terminal failure: mark it, try the next candidate."""
+    """Current attempt hit a dead end: mark it, try the next candidate."""
     attempts = record.get("attempts", [])
     if attempts and attempts[-1]["outcome"] is None:
         attempts[-1]["outcome"] = transfer_status
@@ -212,6 +215,94 @@ def _fail_or_fallback(
         % (display, transfer_status, next_index + 1)
     )
     enqueue_candidate(slsk, cfg, record, next_index)
+
+
+def _current_attempt(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    attempts = record.get("attempts", [])
+    if not attempts:
+        return None
+    attempt = attempts[-1]
+    if attempt.get("outcome") is not None:
+        return None
+    if attempt.get("candidate_index") != record.get("chosen_index"):
+        return None
+    return attempt
+
+
+def _nudge_or_drop(
+    record: Dict[str, Any],
+    transfer: Dict[str, Any],
+    status: str,
+    slsk: SlskClient,
+    cfg: Config,
+    log: Log,
+    display: str,
+) -> bool:
+    """Handle a stalled transfer (remote-queued or transient failure).
+
+    Like clicking "Retry" in the Nicotine+ Downloads tab: re-enqueueing the
+    same (username, virtual_path) makes Nicotine+ re-request the file. Each
+    candidate gets cfg.max_retries nudges, spaced cfg.stall_retry_mins apart;
+    a queue position that is still moving counts as progress and defers the
+    clock. After the budget is spent the uploader is dropped and the next
+    candidate takes over. Returns True when the record changed.
+    """
+    if cfg.max_retries <= 0:
+        return False
+    attempt = _current_attempt(record)
+    if attempt is None:
+        return False
+
+    # A moving remote queue is progress, not a stall.
+    if status == QUEUED_TRANSFER_STATUS:
+        position = int(transfer.get("queue_position") or 0)
+        last_position = attempt.get("last_queue_position")
+        if last_position is None or position < int(last_position):
+            attempt["last_queue_position"] = position
+            attempt["last_progress_at"] = now_iso()
+            return True
+
+    stalled_for = min(
+        seconds_since(attempt.get("enqueued_at")),
+        seconds_since(attempt.get("last_retry_at")),
+        seconds_since(attempt.get("last_progress_at")),
+    )
+    if stalled_for < cfg.stall_retry_mins * 60:
+        return False
+
+    retries = int(attempt.get("retries") or 0)
+    if retries >= cfg.max_retries:
+        log(
+            "  %s: still %s after %d nudges — dropping this uploader. NOTE: "
+            "the abandoned transfer stays in Nicotine+ and may still finish "
+            "later; remove it from the Downloads tab if you don't want a "
+            "second copy." % (display, status, retries)
+        )
+        _fail_or_fallback(
+            record,
+            "%s (dropped after %d stalled retries)" % (status, retries),
+            slsk,
+            cfg,
+            log,
+            display,
+        )
+        return True
+
+    candidate = record["candidates"][record["chosen_index"]]
+    slsk.enqueue(
+        candidate["username"],
+        candidate["virtual_path"],
+        int(candidate.get("size") or 0),
+        file_attributes=candidate.get("file_attributes") or {},
+        folder_path=cfg.dest_dir,
+    )
+    attempt["retries"] = retries + 1
+    attempt["last_retry_at"] = now_iso()
+    log(
+        "  %s: %s — nudged the download (retry %d/%d)"
+        % (display, status, retries + 1, cfg.max_retries)
+    )
+    return True
 
 
 def sync_transfers(
@@ -272,8 +363,18 @@ def sync_transfers(
             if record["status"] != TrackStatus.DOWNLOADING:
                 set_track_status(record, TrackStatus.DOWNLOADING)
                 changed = True
+        elif status in TRANSIENT_FAILURE_STATUSES or status == QUEUED_TRANSFER_STATUS:
+            # Connection blips and remote queues: Nicotine+ retries these on
+            # its own, and there is no cancel API — falling back immediately
+            # would risk downloading the track twice. Nudge instead.
+            if record["status"] != TrackStatus.QUEUED:
+                set_track_status(record, TrackStatus.QUEUED)
+                changed = True
+            if _nudge_or_drop(record, transfer, status, slsk, cfg, log, display):
+                changed = True
         else:
-            # Queued / Paused / anything non-terminal: keep waiting.
+            # Paused / anything unknown: keep waiting, never nudge (a pause
+            # is a deliberate user action in the GUI).
             if record["status"] != TrackStatus.QUEUED:
                 set_track_status(record, TrackStatus.QUEUED)
                 changed = True

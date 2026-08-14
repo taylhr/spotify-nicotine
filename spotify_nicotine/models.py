@@ -26,19 +26,25 @@ class StatusReason:
 
 
 # Transfer statuses reported by the Nicotine+ API plugin (see POSTMAN_API.md 7.1).
-# Terminal failures are the only statuses that trigger fallback to the next
-# candidate; a transfer stuck in a remote queue is left alone (no cancel API).
+#
+# TERMINAL failures never self-resurrect, so falling back to another source is
+# safe. TRANSIENT failures are connection blips that Nicotine+ itself retries
+# when the peer returns — falling back on those would double-download (there is
+# no cancel API), so they are nudged (re-enqueued) instead, with a retry cap.
 TERMINAL_FAILURE_STATUSES = frozenset({
     "Cancelled",
     "Filtered",
-    "User logged off",
-    "Connection closed",
-    "Connection timeout",
     "Download folder error",
     "Local file error",
 })
+TRANSIENT_FAILURE_STATUSES = frozenset({
+    "User logged off",
+    "Connection closed",
+    "Connection timeout",
+})
 
 FINISHED_STATUS = "Finished"
+QUEUED_TRANSFER_STATUS = "Queued"
 TRANSFERRING_STATUSES = frozenset({"Transferring", "Getting status"})
 
 LOSSLESS_EXTENSIONS = frozenset({"flac", "ape", "alac", "wav", "aiff"})
