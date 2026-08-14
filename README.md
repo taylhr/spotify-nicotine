@@ -236,6 +236,42 @@ downloaded automatically.)
   re-searches live,
 - **q** quits; everything is saved, `resolve` continues where you left off.
 
+### Tidying filenames
+
+Soulseek filenames are whatever the uploader chose (`05 - hc.mp3`,
+`01_track.mp3`, ...). With `--rename-files`, finished downloads are renamed
+to `Artist - Title.ext` from the Spotify metadata — but only for matches the
+tool is certain about (`--rename-min-confidence`, default a perfect `1.0`),
+so a tidy name doubles as a statement that the file is definitely the right
+song. Anything less certain keeps its original name for you to check.
+
+```bash
+.venv/bin/python -m spotify_nicotine download "https://open.spotify.com/playlist/YOUR_PLAYLIST_ID" --rename-files
+```
+
+**Which files qualify:** reaching exactly `1.0` needs a perfect title, a
+perfect artist, a duration within 3 seconds *and* a matching album folder. A
+file that is right in every way but sits in a plain folder scores about
+`0.96`, so with the strict default it keeps its original name. If you want
+those tidied too — most people do — run with `--rename-min-confidence 0.95`.
+
+Details worth knowing:
+
+- The primary artist is used, so collaborations become
+  `Calvin Harris - This Is What You Came For.mp3`. Titles are kept exactly as
+  Spotify gives them, including `(feat. ...)` and `(Remastered)` parts.
+- Characters that filenames can't contain (`/`, `:`, ...) become `-`.
+- An existing *different* file with the target name is never overwritten; the
+  new file becomes `... (2).mp3`.
+- Renaming is safe for resume: the tool identifies downloads by the
+  uploader's remote path, never by your local filename, and finished tracks
+  are never re-queued. (Deleting the state file is a different matter — that
+  makes the tool forget everything and re-download from scratch.)
+- Downloads that finish after the script exits get renamed on the next
+  `download` or `status` run. Files downloaded *before* you first used the
+  flag are only renamed if the tool still knows where they landed, which it
+  does when `--dest-dir` is set.
+
 ### Checking progress later
 
 ```bash
@@ -266,6 +302,8 @@ All options go after the subcommand. Defaults in parentheses.
 | `--limit N` | Only process the first N unfinished tracks (testing). |
 | `--dest-dir PATH` | Ask Nicotine+ to save these files into a specific folder (e.g. one folder per playlist). |
 | `--dry-run` | Search and score only; queue nothing. |
+| `--rename-files` | Rename finished downloads to `Artist - Title.ext` using the Spotify metadata (off by default). Only files at or above `--rename-min-confidence` are touched. |
+| `--rename-min-confidence 1.0` | Confidence required before a file is renamed (`1.0` — only flawless matches). A score of exactly 1.0 needs the album folder to match too; an otherwise-perfect match in a plain folder scores ~0.96, so `--rename-min-confidence 0.95` is the practical setting if too few files get renamed. |
 | `--state-dir ./state` | Where per-playlist progress files live (`./state`). |
 | `--api-url URL` | Nicotine+ API address (`http://127.0.0.1:12339`). |
 | `--api-token TOKEN` | API token, if you set one in the plugin settings. |
@@ -388,7 +426,7 @@ so you can accept or reject them deliberately.
 .venv/bin/python -m pytest
 ```
 
-The test suite (232 tests) runs fully offline. `scripts/smoke.sh` is a live
+The test suite (259 tests) runs fully offline. `scripts/smoke.sh` is a live
 end-to-end checklist to run on the machine where Nicotine+ is installed.
 State files are plain JSON in `./state/` — safe to inspect, and deleting one
 makes the tool treat that playlist as brand new.

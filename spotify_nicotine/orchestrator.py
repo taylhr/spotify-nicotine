@@ -8,6 +8,7 @@ queue, so thin first passes don't serialize the run.
 """
 
 import collections
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
@@ -30,6 +31,7 @@ from spotify_nicotine.models import (
     TRANSIENT_FAILURE_STATUSES,
     TrackStatus,
 )
+from spotify_nicotine.rename import apply_renames, local_filename
 from spotify_nicotine.slsk_api import SearchWatch, SlskApiError, SlskClient
 from spotify_nicotine.state import (
     StateStore,
@@ -353,6 +355,13 @@ def sync_transfers(
             if attempts and attempts[-1]["outcome"] is None:
                 attempts[-1]["outcome"] = FINISHED_STATUS
                 attempts[-1]["finished_at"] = now_iso()
+            # Remember where the file landed while the transfer entry still
+            # says so; --rename-files needs it, possibly on a later run.
+            if transfer.get("folder_path"):
+                record["local_folder"] = transfer["folder_path"]
+                record["local_path"] = os.path.join(
+                    transfer["folder_path"], local_filename(candidate["virtual_path"])
+                )
             set_track_status(record, TrackStatus.DOWNLOADED)
             log("  DONE %s" % display)
             changed = True
@@ -816,3 +825,4 @@ def run_download(
         monitor_until_settled(
             state, slsk, cfg, store, log=log, sleep=sleep, clock=clock
         )
+        apply_renames(state, cfg, store, log=log)

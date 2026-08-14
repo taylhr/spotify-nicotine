@@ -114,6 +114,7 @@ class FakeSlsk:
             {
                 "username": username,
                 "virtual_path": virtual_path,
+                "folder_path": folder_path or "/downloads",
                 "status": "Queued",
                 "progress_pct": 0,
             },

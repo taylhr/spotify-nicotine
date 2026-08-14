@@ -38,6 +38,8 @@ DEFAULTS = {
     "dest_dir": None,
     "dry_run": False,
     "retry_no_results": False,
+    "rename_files": False,
+    "rename_min_confidence": 1.0,
     "state_dir": "./state",
     "verbose": False,
 }
@@ -91,6 +93,8 @@ class Config:
     limit: Optional[int]
     dest_dir: Optional[str]
     dry_run: bool
+    rename_files: bool
+    rename_min_confidence: float
     state_dir: str
     verbose: bool
 
@@ -202,6 +206,7 @@ def load_config(args: argparse.Namespace, environ: Optional[Dict[str, str]] = No
         "search_delay",
         "stall_retry_mins",
         "monitor_mins",
+        "rename_min_confidence",
     ):
         merged[key] = float(merged[key])
     for key in (
@@ -236,6 +241,8 @@ def load_config(args: argparse.Namespace, environ: Optional[Dict[str, str]] = No
     if merged["limit"] is not None:
         merged["limit"] = int(merged["limit"])
     merged["dry_run"] = bool(merged["dry_run"])
+    merged["rename_files"] = bool(merged["rename_files"])
+    merged["retry_no_results"] = bool(merged["retry_no_results"])
     merged["verbose"] = bool(merged["verbose"])
 
     return Config(**{f.name: merged[f.name] for f in fields(Config)})

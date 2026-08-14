@@ -15,6 +15,7 @@ from spotify_nicotine import __version__, oauth, ui
 from spotify_nicotine.config import Config, ConfigError, load_config, parse_playlist_ref
 from spotify_nicotine.models import StatusReason, TrackStatus
 from spotify_nicotine.orchestrator import reconcile, run_download
+from spotify_nicotine.rename import apply_renames
 from spotify_nicotine.resolve import run_resolve
 from spotify_nicotine.slsk_api import SlskApiError, SlskClient
 from spotify_nicotine.spotify import (
@@ -117,6 +118,22 @@ def build_parser() -> argparse.ArgumentParser:
             help="local download folder passed to Nicotine+ (default: its own)",
         )
         sub.add_argument("--dry-run", action="store_true", default=False)
+        sub.add_argument(
+            "--rename-files",
+            action="store_true",
+            default=False,
+            dest="rename_files",
+            help="rename finished downloads to 'Artist - Title.ext' using the "
+            "Spotify metadata (only for matches at or above "
+            "--rename-min-confidence)",
+        )
+        sub.add_argument(
+            "--rename-min-confidence",
+            type=float,
+            dest="rename_min_confidence",
+            help="confidence required before a file is renamed (default 1.0, "
+            "i.e. only perfect matches)",
+        )
         sub.add_argument(
             "--retry-no-results",
             action="store_true",
@@ -377,6 +394,7 @@ def cmd_status(cfg: Config, playlist_id: str) -> int:
             "(Nicotine+ API not reachable; showing last known state without "
             "refreshing transfer progress)"
         )
+    apply_renames(state, cfg, store, log=print)
 
     for line in ui.summary_lines(state, verbose=True):
         print(line)

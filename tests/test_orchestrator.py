@@ -10,6 +10,7 @@ from spotify_nicotine.orchestrator import (
     run_download,
     search_track,
 )
+from spotify_nicotine.rename import apply_renames
 from spotify_nicotine.state import StateStore, merge_playlist, new_state
 
 from tests.conftest import make_cfg, make_item, make_track
@@ -450,6 +451,69 @@ class TestStallRetries:
 
         reconcile(state, slsk, cfg, store)
         assert len(slsk.enqueues) == 1
+
+
+class TestRenameDoesNotBreakResume:
+    """Renaming touches only the local file; the tool identifies downloads by
+    the remote (username, virtual_path), so resume must be unaffected."""
+
+    def test_renamed_download_is_not_re_downloaded(self, tmp_path):
+        downloads = tmp_path / "downloads"
+        downloads.mkdir()
+        cfg = make_cfg(
+            rename_files=True, dest_dir=str(downloads), monitor_mins=0
+        )
+        store, state = setup_state(tmp_path, make_track(track_id="t1"))
+        slsk = FakeSlsk({"default": good_items(6)})
+        run_scheduler(cfg, state, slsk, store)
+
+        record = state["tracks"]["t1"]
+        chosen = record["candidates"][record["chosen_index"]]
+        # the file lands, and the transfer reports Finished
+        local_name = chosen["virtual_path"].rsplit("\\", 1)[-1]
+        (downloads / local_name).write_text("audio")
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "Finished")
+
+        reconcile(state, slsk, cfg, store)
+        assert record["status"] == TrackStatus.DOWNLOADED
+        assert apply_renames(state, cfg, store) == 1
+        assert (downloads / "Eagles - Hotel California.mp3").exists()
+
+        searches_before = len(slsk.searches)
+        enqueues_before = len(slsk.enqueues)
+
+        # a later run must leave the renamed track completely alone
+        run_scheduler(cfg, state, slsk, store)
+        assert record["status"] == TrackStatus.DOWNLOADED
+        assert len(slsk.searches) == searches_before
+        assert len(slsk.enqueues) == enqueues_before
+        assert (downloads / "Eagles - Hotel California.mp3").exists()
+
+    def test_rename_survives_cleared_transfer_list(self, tmp_path):
+        """Even if Nicotine+ forgets the transfer, a downloaded track is not
+        re-queued (that reconcile path only covers queued/downloading)."""
+        downloads = tmp_path / "downloads"
+        downloads.mkdir()
+        cfg = make_cfg(
+            rename_files=True, dest_dir=str(downloads), monitor_mins=0
+        )
+        store, state = setup_state(tmp_path, make_track(track_id="t1"))
+        slsk = FakeSlsk({"default": good_items(6)})
+        run_scheduler(cfg, state, slsk, store)
+
+        record = state["tracks"]["t1"]
+        chosen = record["candidates"][record["chosen_index"]]
+        (downloads / chosen["virtual_path"].rsplit("\\", 1)[-1]).write_text("audio")
+        slsk.set_status(chosen["username"], chosen["virtual_path"], "Finished")
+        reconcile(state, slsk, cfg, store)
+        apply_renames(state, cfg, store)
+
+        slsk.transfers.clear()  # user cleared finished transfers in the GUI
+        enqueues_before = len(slsk.enqueues)
+        reconcile(state, slsk, cfg, store)
+
+        assert record["status"] == TrackStatus.DOWNLOADED
+        assert len(slsk.enqueues) == enqueues_before
 
 
 class TestMonitor:
