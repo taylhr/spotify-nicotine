@@ -272,6 +272,36 @@ Details worth knowing:
   flag are only renamed if the tool still knows where they landed, which it
   does when `--dest-dir` is set.
 
+### Renaming from the files' own tags (companion script)
+
+`--rename-files` only touches files this tool is *certain* about, and it
+needs the state file to know what a download was. For everything else —
+files from other sources, or matches below the confidence bar —
+[`scripts/rename-by-tags.sh`](scripts/rename-by-tags.sh) renames using the
+audio files' own embedded tags, read with `ffprobe` (part of ffmpeg):
+
+```bash
+brew install ffmpeg
+```
+
+Copy it next to your music and run it; it works on its own folder by
+default, and **previews without changing anything** until you pass
+`--apply`:
+
+```bash
+cp scripts/rename-by-tags.sh ~/Music/soulseek/
+cd ~/Music/soulseek
+./rename-by-tags.sh                 # preview
+./rename-by-tags.sh -r --apply      # rename for real, including album folders
+```
+
+It skips files whose tags have no title (and tells you which), uses just the
+title when the artist tag is missing, never overwrites a different file with
+the same name, ignores non-audio files, and is safe to re-run — a file
+already named correctly, including a numbered `... (2).mp3` copy, is left
+alone. It has no connection to the state file, so it cannot affect the
+tool's download tracking either way.
+
 ### Grouping albums into folders
 
 With `--album-folders`, the playlist is scanned at the start of every run for
