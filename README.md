@@ -277,7 +277,7 @@ Details worth knowing:
 `--rename-files` only touches files this tool is *certain* about, and it
 needs the state file to know what a download was. For everything else —
 files from other sources, or matches below the confidence bar —
-[`scripts/rename-by-tags.sh`](scripts/rename-by-tags.sh) renames using the
+[`rename-by-tags.sh`](rename-by-tags.sh) renames using the
 audio files' own embedded tags, read with `ffprobe` (part of ffmpeg):
 
 ```bash
@@ -289,7 +289,7 @@ default, and **previews without changing anything** until you pass
 `--apply`:
 
 ```bash
-cp scripts/rename-by-tags.sh ~/Music/soulseek/
+cp rename-by-tags.sh ~/Music/soulseek/
 cd ~/Music/soulseek
 ./rename-by-tags.sh                 # preview
 ./rename-by-tags.sh -r --apply      # rename for real, including album folders
