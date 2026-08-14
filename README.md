@@ -194,9 +194,11 @@ If the proposed matches look right, run it for real:
 What happens:
 
 - Tracks are searched in overlapping batches (default 6 at once), while new
-  searches are dispatched no faster than one per `--search-delay` seconds —
-  Soulseek servers temporarily ban clients that search too fast. A
-  100-track playlist typically searches in a few minutes.
+  searches are dispatched no faster than one per `--search-delay` seconds
+  (default 8). That pace is deliberate: the Soulseek server blocks clients
+  that search faster, and the block ruins the rest of the run. Budget
+  roughly **8 seconds per track** — about 15 minutes for 100 tracks — and
+  leave it running.
 - Confident matches are queued in Nicotine+'s **Downloads** tab; the files
   land in your normal Nicotine+ download folder (or `--dest-dir`).
 - Low-confidence tracks are collected; at the end you're offered an
@@ -253,8 +255,10 @@ All options go after the subcommand. Defaults in parentheses.
 | `--min-bitrate 192` | Bitrate floor (`192`, `0` = off). Files below it are never auto-downloaded; if a track's only confident match is below the floor, you get a notice and can accept it manually in `resolve`. |
 | `--min-confidence 0.65` | Match-confidence gate for automatic download (`0.65`). Lower = more automatic downloads, more risk of wrong files. |
 | `--search-timeout 20` | Hard cap on waiting for one search's results (`20`). Most searches conclude much sooner — as soon as results stop arriving. |
-| `--search-delay 2.0` | Minimum seconds between search dispatches (`2.0`, floor `0.5`). This is the Soulseek-server politeness limit; lowering it speeds things up but risks a temporary search ban. |
-| `--search-concurrency 6` | How many track searches run at once (`6`, max `15`). Searches overlap their waiting time; the dispatch rate above still applies globally. |
+| `--search-delay 8.0` | Minimum seconds between search dispatches (`8.0`, floor `2.0`). **This is the setting that keeps you unbanned** — the Soulseek server hard-blocks clients that search faster, and 8s is the rate observed to survive 300+ track batches. Only lower it for small runs, and expect trouble under ~5s. |
+| `--search-concurrency 6` | How many track searches run at once (`6`, max `15`). This overlaps the *waiting*, not the dispatch rate, so it speeds runs up without provoking the server. |
+| `--max-empty-streak 6` | Consecutive tracks finding zero results before the tool checks whether the server has stopped answering, and stops the run if so (`6`, `0` = disable). |
+| `--retry-no-results` | Re-search tracks previously recorded as having no results — use after a run was cut short by the rate limit. |
 | `--max-fallbacks 3` | If a download dies permanently (cancelled, filtered, disk error), how many alternative candidates to try (`3`). |
 | `--stall-retry-mins 5` | How long a download may sit stalled (stuck queue, connection dropped, uploader offline) before it gets nudged — the equivalent of clicking *Retry* in Nicotine+ (`5`). |
 | `--max-retries 3` | Nudges per uploader before giving up on them and falling back to the next candidate (`3`, `0` = never nudge or drop). A remote queue that is still *moving* doesn't consume nudges. |
@@ -353,13 +357,19 @@ so you can accept or reject them deliberately.
   with `--redirect-uri`.
 - **`NotOpenSSLWarning` from urllib3** — harmless on macOS system Python;
   everything works.
-- **Searches feel slow** — the dispatch rate (`--search-delay`) is the
-  deliberate bottleneck; the Soulseek server temporarily blocks clients that
-  fire searches rapidly. You can try `--search-delay 1` for double the rate.
-- **Every search suddenly returns zero results** — that's what a Soulseek
-  server search-throttle looks like. Stop the run, wait a few minutes, and
-  restart with a higher `--search-delay` and/or lower `--search-concurrency`
-  (resume picks up where it left off).
+- **Searches feel slow** — that's the rate limit, not the tool. The Soulseek
+  server blocks clients that search faster than roughly one search every few
+  seconds, so `--search-delay` is the deliberate bottleneck and lowering it
+  is how runs get killed. Concurrency already overlaps everything else, so
+  the run finishes in about `8s × tracks` no matter what else you tune.
+- **"STOPPING: N searches in a row came back completely empty"** — the
+  server stopped answering (its rate limit). The run stops on purpose: the
+  affected tracks are put back to `pending` rather than being written off as
+  unfindable, and queued downloads keep going. Wait 15–30 minutes, then
+  re-run the same command; if it recurs, raise `--search-delay`.
+- **A run got rate-limited before this protection existed** and left tracks
+  wrongly marked "no results" — re-run with `--retry-no-results` to search
+  them again.
 - **A download sits at "Queued" or "User logged off"** — connection blips
   and remote queues are handled patiently, because falling back to another
   uploader immediately can end in *two* copies of the file (Nicotine+
@@ -378,7 +388,7 @@ so you can accept or reject them deliberately.
 .venv/bin/python -m pytest
 ```
 
-The test suite (227 tests) runs fully offline. `scripts/smoke.sh` is a live
+The test suite (232 tests) runs fully offline. `scripts/smoke.sh` is a live
 end-to-end checklist to run on the machine where Nicotine+ is installed.
 State files are plain JSON in `./state/` — safe to inspect, and deleting one
 makes the tool treat that playlist as brand new.

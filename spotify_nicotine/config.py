@@ -23,8 +23,13 @@ DEFAULTS = {
     "prefer_bitrate": 320,
     "min_bitrate": 192,
     "search_timeout": 20.0,
-    "search_delay": 2.0,
+    # The Soulseek server throttles clients that search too fast, and the
+    # penalty is a hard block that ruins a run. One search per 8 seconds is
+    # the rate observed to survive 300+ track batches; concurrency still
+    # overlaps the *waiting*, so this costs far less than it looks.
+    "search_delay": 8.0,
     "search_concurrency": 6,
+    "max_empty_streak": 6,
     "max_fallbacks": 3,
     "stall_retry_mins": 5.0,
     "max_retries": 3,
@@ -32,6 +37,7 @@ DEFAULTS = {
     "limit": None,
     "dest_dir": None,
     "dry_run": False,
+    "retry_no_results": False,
     "state_dir": "./state",
     "verbose": False,
 }
@@ -50,6 +56,10 @@ ENV_MAP = {
 }
 
 AUTH_MODES = ("auto", "user", "client")
+
+# Hard floor on the search dispatch rate. Deliberately protective: exceeding
+# the Soulseek server's search limit gets you blocked, not just slowed.
+MIN_SEARCH_DELAY = 2.0
 
 
 class ConfigError(Exception):
@@ -72,6 +82,8 @@ class Config:
     search_timeout: float
     search_delay: float
     search_concurrency: int
+    max_empty_streak: int
+    retry_no_results: bool
     max_fallbacks: int
     stall_retry_mins: float
     max_retries: int
@@ -198,6 +210,7 @@ def load_config(args: argparse.Namespace, environ: Optional[Dict[str, str]] = No
         "max_fallbacks",
         "max_retries",
         "search_concurrency",
+        "max_empty_streak",
     ):
         merged[key] = int(merged[key])
     if merged["max_retries"] < 0:
@@ -212,10 +225,13 @@ def load_config(args: argparse.Namespace, environ: Optional[Dict[str, str]] = No
             "search_concurrency must be between 1 and 15 (the Nicotine+ plugin "
             "only caches ~20 searches; more concurrency risks losing results)"
         )
-    if merged["search_delay"] < 0.5:
+    if merged["search_delay"] < MIN_SEARCH_DELAY:
         raise ConfigError(
-            "search_delay must be at least 0.5 seconds: dispatching searches "
-            "faster risks a temporary ban from the Soulseek server"
+            "search_delay must be at least %.1f seconds. The Soulseek server "
+            "hard-blocks clients that search faster than roughly one search "
+            "every few seconds, and the block ruins the rest of the run; the "
+            "default of %.1fs is the rate observed to survive large batches."
+            % (MIN_SEARCH_DELAY, DEFAULTS["search_delay"])
         )
     if merged["limit"] is not None:
         merged["limit"] = int(merged["limit"])

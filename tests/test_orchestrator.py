@@ -622,6 +622,87 @@ class TestScheduler:
         assert len(slsk.enqueues) == 1
         assert slsk.enqueues[0]["username"] == "flac_user"
 
+    def test_throttle_detection_parks_tracks_as_pending(self, tmp_path):
+        """A Soulseek rate limit makes every search return nothing. Those are
+        false negatives, so the run must stop rather than mark the whole
+        playlist unfindable."""
+        cfg = make_cfg(max_empty_streak=3, monitor_mins=0)
+        store, state = setup_state(tmp_path, *make_tracks(10))
+        slsk = FakeSlsk({})  # every search empty: the throttle signature
+        messages = []
+        run_scheduler(cfg, state, slsk, store, log=messages.append)
+
+        statuses = [r["status"] for r in state["tracks"].values()]
+        assert all(s == TrackStatus.PENDING for s in statuses), statuses
+        assert "throttled_at" in state["last_run"]
+        assert store.load()["tracks"]["t0"]["status"] == TrackStatus.PENDING
+        assert any("rate limit" in m for m in messages)
+        # stopped short of walking the full ladder for all 10 tracks
+        assert len(slsk.searches) < 20
+
+    def test_a_few_unfindable_tracks_do_not_trip_the_detector(self, tmp_path):
+        """Genuinely obscure tracks must still be reported as 'no results' —
+        only a sustained run of empty searches means the server cut us off."""
+        cfg = make_cfg(max_empty_streak=3, monitor_mins=0)
+        tracks = []
+        for i in range(4):
+            track = make_track(track_id="t%d" % i, name="Song Number %d" % i)
+            track.positions = [i]
+            tracks.append(track)
+        store, state = setup_state(tmp_path, *tracks)
+
+        # two findable, two not: below the streak threshold
+        slsk = FakeSlsk(
+            {
+                "eagles song number %d" % i: [
+                    make_item(
+                        "Music\\Eagles\\05 - Song Number %d.mp3" % i,
+                        username="hit_user",
+                        file_attributes={"0": 320, "1": 391},
+                    )
+                ]
+                for i in (0, 1)
+            }
+        )
+        run_scheduler(cfg, state, slsk, store)
+
+        assert "throttled_at" not in (state.get("last_run") or {})
+        assert state["tracks"]["t0"]["status"] == TrackStatus.QUEUED
+        assert state["tracks"]["t1"]["status"] == TrackStatus.QUEUED
+        for track_id in ("t2", "t3"):
+            record = state["tracks"][track_id]
+            assert record["status"] == TrackStatus.NEEDS_REVIEW
+            assert record["status_reason"] == StatusReason.NO_RESULTS
+
+    def test_obscure_streak_survives_when_server_still_answers(self, tmp_path):
+        """Unfindable tracks bunch up at the end of a run (their ladder
+        retries queue last), so a streak alone must not be read as a
+        throttle — a canary search settles it."""
+        cfg = make_cfg(max_empty_streak=3, monitor_mins=0)
+        store, state = setup_state(tmp_path, *make_tracks(5))
+        # nothing matches the playlist, but the server clearly still answers
+        slsk = FakeSlsk({"the beatles": good_items(6)})
+        messages = []
+        run_scheduler(cfg, state, slsk, store, log=messages.append)
+
+        assert "throttled_at" not in (state.get("last_run") or {})
+        for record in state["tracks"].values():
+            assert record["status"] == TrackStatus.NEEDS_REVIEW
+            assert record["status_reason"] == StatusReason.NO_RESULTS
+        assert any("still answering searches" in m for m in messages)
+        assert "the beatles" in slsk.searches
+
+    def test_throttle_detection_disabled(self, tmp_path):
+        cfg = make_cfg(max_empty_streak=0, monitor_mins=0)
+        store, state = setup_state(tmp_path, *make_tracks(4))
+        slsk = FakeSlsk({})
+        run_scheduler(cfg, state, slsk, store)
+
+        # opted out: every track gets the normal no-results verdict
+        for record in state["tracks"].values():
+            assert record["status"] == TrackStatus.NEEDS_REVIEW
+            assert record["status_reason"] == StatusReason.NO_RESULTS
+
     def test_evicted_tokens_handled_gracefully(self, tmp_path, cfg):
         store, state = setup_state(tmp_path, *make_tracks(2))
         slsk = FakeSlsk({"default": good_items(6)})

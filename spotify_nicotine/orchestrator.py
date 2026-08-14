@@ -528,6 +528,76 @@ def _conclude_track(
     store.save(state)
 
 
+# A query with so many hits on Soulseek that an empty response means the
+# server is not answering us, rather than that the music is obscure.
+CANARY_QUERY = "the beatles"
+
+
+def _server_answers_searches(
+    slsk: SlskClient,
+    cfg: Config,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> bool:
+    """Decide whether an empty-result streak means throttling or obscurity.
+
+    Unfindable tracks bunch together (their ladder retries queue behind every
+    first pass), so a streak alone is not proof. One search for something
+    universally shared settles it.
+    """
+    sleep(cfg.search_delay)
+    try:
+        token = slsk.start_search(CANARY_QUERY)
+        watch = SearchWatch(clock(), cfg.search_timeout)
+        while True:
+            sleep(SCHEDULER_TICK_S)
+            total = int(slsk.get_results(token, offset=0, limit=1).get("total", 0))
+            if watch.record_poll(total, clock()):
+                return total > 0
+    except SlskApiError:
+        return True  # inconclusive: never abort a run on a failed probe
+
+
+def _abort_throttled(
+    state: Dict[str, Any],
+    store: StateStore,
+    empty_streak: List[str],
+    in_flight: List["_SearchJob"],
+    dispatch: "Deque[_SearchJob]",
+    log: Log,
+) -> None:
+    """The Soulseek server has stopped answering our searches.
+
+    Every search now comes back empty, so the "no results" verdicts already
+    recorded are false negatives. Undo them and park everything unfinished
+    back at 'pending' so a later run re-searches instead of leaving the
+    playlist permanently marked as unfindable.
+    """
+    for track_id in empty_streak:
+        record = state.get("tracks", {}).get(track_id)
+        if record is not None and record.get("status") == TrackStatus.NEEDS_REVIEW:
+            set_track_status(record, TrackStatus.PENDING)
+    for job in list(in_flight) + list(dispatch):
+        set_track_status(job.record, TrackStatus.PENDING)
+
+    if isinstance(state.get("last_run"), dict):
+        state["last_run"]["throttled_at"] = now_iso()
+    store.save(state)
+
+    log("")
+    log(
+        "STOPPING: %d searches in a row came back completely empty. That is "
+        "what the Soulseek server's search rate limit looks like — it has "
+        "stopped answering this client." % len(empty_streak)
+    )
+    log(
+        "  No tracks were marked unfindable; the affected ones are back to "
+        "'pending'. Wait ~15-30 minutes, then re-run the same command to "
+        "resume (raise --search-delay if it keeps happening). Downloads "
+        "already queued in Nicotine+ are unaffected and keep going."
+    )
+
+
 def _run_search_scheduler(
     cfg: Config,
     state: Dict[str, Any],
@@ -556,6 +626,7 @@ def _run_search_scheduler(
 
     total = len(dispatch)
     in_flight: List[_SearchJob] = []
+    empty_streak: List[str] = []  # consecutively concluded with zero results
     done = 0
     next_dispatch_at = clock()
     last_sweep = clock()
@@ -673,6 +744,29 @@ def _run_search_scheduler(
                     log,
                     "[%d/%d done]" % (done, total),
                 )
+                # A run of tracks where every query returned literally nothing
+                # means the server stopped answering, not that the music does
+                # not exist.
+                if job.items:
+                    empty_streak.clear()
+                else:
+                    empty_streak.append(job.track_id)
+                    if (
+                        cfg.max_empty_streak
+                        and len(empty_streak) >= cfg.max_empty_streak
+                    ):
+                        if _server_answers_searches(slsk, cfg, sleep, clock):
+                            log(
+                                "  (%d tracks in a row found nothing, but the "
+                                "server is still answering searches — these "
+                                "really are hard to find)" % len(empty_streak)
+                            )
+                            empty_streak.clear()
+                        else:
+                            _abort_throttled(
+                                state, store, empty_streak, in_flight, dispatch, log
+                            )
+                            return
 
         # 3. periodic transfer sweep so early failures fall back promptly
         if not cfg.dry_run and now - last_sweep >= TRANSFER_SWEEP_EVERY_S:

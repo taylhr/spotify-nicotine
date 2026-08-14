@@ -124,9 +124,17 @@ class TestPrecedence:
         with pytest.raises(ConfigError, match="search_concurrency"):
             load_config(make_args(search_concurrency=16), environ={})
 
+    def test_search_delay_default_is_conservative(self):
+        # The Soulseek server blocks fast searchers; 8s survived 300+ tracks.
+        cfg = load_config(make_args(), environ={})
+        assert cfg.search_delay == 8.0
+        assert cfg.max_empty_streak == 6
+
     def test_search_delay_floor(self):
         with pytest.raises(ConfigError, match="search_delay"):
-            load_config(make_args(search_delay=0.2), environ={})
+            load_config(make_args(search_delay=1.0), environ={})
+        # the floor is honoured, not silently clamped
+        assert load_config(make_args(search_delay=2.0), environ={}).search_delay == 2.0
 
     def test_stall_retry_defaults(self):
         cfg = load_config(make_args(), environ={})

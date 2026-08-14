@@ -13,7 +13,7 @@ import requests
 
 from spotify_nicotine import __version__, oauth, ui
 from spotify_nicotine.config import Config, ConfigError, load_config, parse_playlist_ref
-from spotify_nicotine.models import TrackStatus
+from spotify_nicotine.models import StatusReason, TrackStatus
 from spotify_nicotine.orchestrator import reconcile, run_download
 from spotify_nicotine.resolve import run_resolve
 from spotify_nicotine.slsk_api import SlskApiError, SlskClient
@@ -25,7 +25,12 @@ from spotify_nicotine.spotify import (
     UserTokenProvider,
     fetch_playlist,
 )
-from spotify_nicotine.state import StateStore, merge_playlist, new_state
+from spotify_nicotine.state import (
+    StateStore,
+    merge_playlist,
+    new_state,
+    set_track_status,
+)
 
 EXIT_OK = 0
 EXIT_NEEDS_REVIEW = 2
@@ -83,6 +88,13 @@ def build_parser() -> argparse.ArgumentParser:
             dest="search_concurrency",
             help="how many track searches run at once (default 6)",
         )
+        sub.add_argument(
+            "--max-empty-streak",
+            type=int,
+            dest="max_empty_streak",
+            help="empty-result tracks in a row before checking whether the "
+            "Soulseek server has stopped answering (default 6, 0 = off)",
+        )
         sub.add_argument("--max-fallbacks", type=int, dest="max_fallbacks")
         sub.add_argument(
             "--stall-retry-mins",
@@ -105,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
             help="local download folder passed to Nicotine+ (default: its own)",
         )
         sub.add_argument("--dry-run", action="store_true", default=False)
+        sub.add_argument(
+            "--retry-no-results",
+            action="store_true",
+            default=False,
+            dest="retry_no_results",
+            help="re-search tracks previously recorded as having no results "
+            "(use after a run was cut short by the Soulseek rate limit)",
+        )
 
     download = subparsers.add_parser(
         "download", help="search and queue the whole playlist"
@@ -281,6 +301,18 @@ def cmd_download(cfg: Config, playlist_id: str) -> int:
     store = StateStore(cfg.state_dir, playlist_id)
     state = store.load() or new_state(meta)
     changes = merge_playlist(state, meta, tracks, skipped)
+
+    if cfg.retry_no_results:
+        reset = 0
+        for record in state["tracks"].values():
+            if (
+                record.get("status") == TrackStatus.NEEDS_REVIEW
+                and record.get("status_reason") == StatusReason.NO_RESULTS
+            ):
+                set_track_status(record, TrackStatus.PENDING)
+                reset += 1
+        print("Re-searching %d track(s) that previously found no results." % reset)
+
     store.save(state)
 
     print(
