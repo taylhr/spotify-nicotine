@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotify-nicotine"
+version = "0.1.0"
+description = "Download Spotify playlists from Soulseek via the Nicotine+ API plugin"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31,<3",
+    "rapidfuzz>=3.9,<4",
+]
+
+[project.scripts]
+spotify-nicotine = "spotify_nicotine.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["spotify_nicotine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
